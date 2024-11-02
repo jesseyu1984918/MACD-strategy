@@ -20,7 +20,7 @@ def calculate_macd(df, short_window=12, long_window=26, signal_window=9):
 # Function to find stocks where MACD crosses above signal line from below, with MACD and signal both below zero within last 10 days
 def find_macd_up_cross_below_zero(stock):
     try:
-        data = yf.download(stock, period="1mo", interval="1d")  # Fetch 1 month of daily data
+        data = yf.download(stock, period="3mo", interval="1d")  # Fetch 1 month of daily data
         data = calculate_macd(data)
 
         # Find cases where MACD crosses above Signal Line from below, with both MACD and Signal below zero
@@ -32,7 +32,7 @@ def find_macd_up_cross_below_zero(stock):
         )
 
         # Check for any upward cross meeting the criteria within the last 10 days
-        recent_cross = data.tail(10)[data['MACD_Up_Cross']]
+        recent_cross = data.tail(3)[data['MACD_Up_Cross']]
 
         # Return only if there's an upward cross within the last 10 days that meets all criteria
         return recent_cross[['Close', 'MACD', 'Signal_Line']] if not recent_cross.empty else None
