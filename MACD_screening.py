@@ -31,7 +31,7 @@ def find_macd_up_cross_below_zero(stock):
             (data['MACD'] < 0) &
             (data['Signal_Line'] < 0), True, False
         )
-
+#just add some comments
         # Check for any upward cross meeting the criteria within the last 10 days
         recent_cross = data.tail(TRAILING_DAY)[data['MACD_Up_Cross']]
 
