@@ -1,16 +1,16 @@
 import yfinance as yf
 import pandas as pd
 import numpy as np
-
+import Interval_searching as Is
 TRAILING_DAY=5
+MACD_CHOICE='FAST'
+MACD={'FAST':[6,19],'SLOW':[12,26]}
 # Load NASDAQ and NYSE tickers from CSV files
-nasdaq_tickers = pd.read_csv(r'/home/jesse/PycharmProjects/MACD-strategy/my_universe.csv')['Symbol'].tolist()
-#nyse_tickers = pd.read_csv('nyse_tickers.csv')['Symbol'].tolist()
-all_tickers = nasdaq_tickers  # Combine lists
+
 
 
 # MACD Calculation Function
-def calculate_macd(df, short_window=12, long_window=26, signal_window=9):
+def calculate_macd(df, short_window=MACD[MACD_CHOICE][0], long_window=MACD[MACD_CHOICE][1], signal_window=9):
     df['EMA12'] = df['Close'].ewm(span=short_window, adjust=False).mean()
     df['EMA26'] = df['Close'].ewm(span=long_window, adjust=False).mean()
     df['MACD'] = df['EMA12'] - df['EMA26']
@@ -19,9 +19,10 @@ def calculate_macd(df, short_window=12, long_window=26, signal_window=9):
 
 
 # Function to find stocks where MACD crosses above signal line from below, with MACD and signal both below zero within last 10 days
-def find_macd_up_cross_below_zero(stock):
+def find_macd_up_cross_below_zero(stock,interval):
     try:
-        data = yf.download(stock, period="3mo", interval="1d")  # Fetch 1 month of daily data
+        data = yf.download(stock, period="1mo", interval=interval)  # Fetch 1 month of daily data
+        print(interval)
         data = calculate_macd(data)
 
         # Find cases where MACD crosses above Signal Line from below, with both MACD and Signal below zero
@@ -41,9 +42,9 @@ def find_macd_up_cross_below_zero(stock):
         print(f"Error processing {stock}: {e}")
         return None
 
-def find_macd_down_cross_above_zero(stock):
+def find_macd_down_cross_above_zero(stock,interval):
     try:
-        data = yf.download(stock, period="3mo", interval="1d")  # Fetch 1 month of daily data
+        data = yf.download(stock, period="3mo", interval=interval)  # Fetch 1 month of daily data
         data = calculate_macd(data)
 
         # Find cases where MACD crosses above Signal Line from below, with both MACD and Signal below zero
@@ -63,29 +64,53 @@ def find_macd_down_cross_above_zero(stock):
         print(f"Error processing {stock}: {e}")
         return None
 # Running the function for all symbols
-up_results = {}
-down_results = {}
-for symbol in all_tickers:
-    cross_up_data = find_macd_up_cross_below_zero(symbol)
-    cross_down_data= find_macd_down_cross_above_zero(symbol)
-    if cross_up_data is not None:
-        up_results[symbol] = cross_up_data
-    if cross_down_data is not None:
-        down_results[symbol]=cross_down_data
+
+def MACD_screening(all_tickers):
+    up_results = {}
+    down_results = {}
+    for symbol in all_tickers:
+        try:
+            interval, ATR = Is.find_ATR(symbol)
+        except:
+            interval = "60m"
+        cross_up_data = find_macd_up_cross_below_zero(symbol, interval)
+        cross_down_data = find_macd_down_cross_above_zero(symbol, interval)
+        if cross_up_data is not None:
+            up_results[symbol] = interval
+        if cross_down_data is not None:
+            down_results[symbol] = interval
+    return up_results,down_results
+    # Display results
+
+
+if __name__=="__main__":
+    up_results = {}
+    down_results = {}
+    for symbol in all_tickers:
+        try:
+            interval,ATR=Is.find_ATR(symbol)
+        except:
+            interval="60m"
+        cross_up_data = find_macd_up_cross_below_zero(symbol,interval)
+        cross_down_data= find_macd_down_cross_above_zero(symbol,interval)
+        if cross_up_data is not None:
+            up_results[symbol] = interval
+        if cross_down_data is not None:
+            down_results[symbol]=interval
 
 # Display results
-if up_results:
-    for symbol, df in up_results.items():
+    if up_results:
+        for symbol,interval in up_results.items():
+            print(
+                f"MACD Upward Cross Above Signal Line with MACD and Signal Below Zero for {symbol} within last 10 period, interval is {interval}:\n")
+    else:
         print(
-            f"MACD Upward Cross Above Signal Line with MACD and Signal Below Zero for {symbol} within last 2 days:\n")
-else:
-    print(
-        "No stocks found where MACD crosses above the signal line within the last 2 days with both MACD and signal below zero.")
-print( " Below is down crossing")
-if down_results:
-    for symbol, df in down_results.items():
+            "No stocks found where MACD crosses above the signal line within the last 2 days with both MACD and signal below zero.")
+    print( " Below is down crossing")
+    if down_results:
+        for symbol, df in down_results.items():
+            print(
+                f"MACD Down Cross Below Signal Line with MACD and Signal Above Zero for {symbol} within last 10 period, interval is {interval}:\n")
+    else:
         print(
-            f"MACD Down Cross Below Signal Line with MACD and Signal Above Zero for {symbol} within last 2 days:\n")
-else:
-    print(
-        "No stocks found where MACD crosses above the signal line within the last 2 days with both MACD and signal above zero.")
+            "No stocks found where MACD crosses above the signal line within the last 2 days with both MACD and signal above zero.")
