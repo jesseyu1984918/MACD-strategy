@@ -66,19 +66,19 @@ def find_macd_down_cross_above_zero(stock,interval):
 # Running the function for all symbols
 
 def MACD_screening(all_tickers):
-    up_results = {}
-    down_results = {}
+    up_results = []
+    down_results = []
     for symbol in all_tickers:
         try:
-            interval, ATR = Is.find_ATR(symbol)
+            interval, ATR,trend,diff= Is.find_ATR(symbol)
         except:
             interval = "60m"
         cross_up_data = find_macd_up_cross_below_zero(symbol, interval)
         cross_down_data = find_macd_down_cross_above_zero(symbol, interval)
         if cross_up_data is not None:
-            up_results[symbol] = interval
+            up_results.append({"symbol":symbol,"ATR interval":interval,"period average EMA slope":trend, "close slope average":diff})
         if cross_down_data is not None:
-            down_results[symbol] = interval
+            down_results.append({"symbol":symbol,"ATR interval":interval,"period average EMA slope":trend, "close slope average":diff})
     return up_results,down_results
     # Display results
 
@@ -88,7 +88,7 @@ if __name__=="__main__":
     down_results = {}
     for symbol in all_tickers:
         try:
-            interval,ATR=Is.find_ATR(symbol)
+            interval, ATR,trend,diff=Is.find_ATR(symbol)
         except:
             interval="60m"
         cross_up_data = find_macd_up_cross_below_zero(symbol,interval)

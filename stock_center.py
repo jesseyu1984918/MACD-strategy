@@ -49,8 +49,8 @@ def main():
         st.write("Find the ATR (Average True Range) of selected tickers.")
 
         if st.button("Run ATR Finder"):
-            results,ATR = Is.find_ATR(tickers)
-            st.dataframe([results,ATR])
+            results,ATR,trend,diff = Is.find_ATR(tickers)
+            st.dataframe({"Interval":results,"ATR":ATR,"period EMA average slope":trend,"period average close diff":diff})
 
 
 if __name__ == "__main__":

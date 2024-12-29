@@ -22,6 +22,7 @@ def calculate_ATR(df, window):
 
     # Average True Range = rolling mean of the TR
     df[f'ATR_{window}'] = df['TR'].rolling(window).mean()
+
     return df
 
 def find_ATR(symbol):
@@ -30,11 +31,25 @@ def find_ATR(symbol):
     for interval in interval_choice:
         df_daily=yf.download(symbol,period="1mo", interval=interval)
         df_daily = calculate_ATR(df_daily, window=window[interval])
+        trend,diff=calculate_trend(df_daily,window=window[interval])
         if df_daily[f'ATR_{window[interval]}'].iloc[-1]/df_daily['Close'].iloc[-1]<0.02:
-            return interval, df_daily[f'ATR_{window[interval]}'].iloc[-1]
+            return interval, df_daily[f'ATR_{window[interval]}'].iloc[-1],trend, diff
 
+def calculate_trend(df,window):
+    # Calculate EMA20
+    df['EMA20'] = df['Close'].ewm(span=window, adjust=False).mean()
+
+    # Calculate slopes
+    df['slope'] = df['EMA20'].diff()
+    df['price_diff'] = df['Close'].diff()
+
+    # Calculate the average difference for the last 10 periods
+    average_diff = df['price_diff'].iloc[(-(window)):].mean()
+    # Calculate average slope of the last 10 periods
+    average_slope = df['slope'].iloc[(-(window)):].mean()
+    return average_slope,average_diff
 if __name__=='__main__':
-    symbol = "KO"  # or any other ticker
+    symbol = "CAVA"  # or any other ticker
     period_daily = "1y"  # daily data for 1 year
     interval_daily = "1d"
 
@@ -49,5 +64,6 @@ if __name__=='__main__':
 
     print(f"Latest daily close for {symbol}: {latest_close_daily:.2f}")
     print(f"Latest 20-day ATR for {symbol} (daily): {latest_atr_daily:.2f}")
-    interval, ATR=find_ATR("KO")
-    print(f"interval of {symbol} is {interval}, ATR is{ATR}")
+    interval, ATR,trend,diff=find_ATR(symbol)
+
+    print(f"interval of {symbol} is {interval}, ATR is{ATR},trend is{trend},diff is {diff}")
