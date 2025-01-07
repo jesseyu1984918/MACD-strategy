@@ -50,7 +50,7 @@ def main():
 
         if st.button("Run ATR Finder"):
             results,ATR,trend,diff = Is.find_ATR(tickers)
-            st.dataframe({"Interval":results,"ATR":ATR,"period EMA average slope":trend,"period average close diff":diff})
+            st.dataframe({"Interval":results,"ATR":ATR,"period MA average slope":trend,"period average close diff":diff})
 
 
 if __name__ == "__main__":

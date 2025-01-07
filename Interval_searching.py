@@ -37,7 +37,7 @@ def find_ATR(symbol):
 
 def calculate_trend(df,window):
     # Calculate EMA20
-    df['EMA20'] = df['Close'].ewm(span=window, adjust=False).mean()
+    df['EMA20'] = df['Close'].rolling(window=window).mean()
 
     # Calculate slopes
     df['slope'] = df['EMA20'].diff()

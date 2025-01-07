@@ -76,9 +76,9 @@ def MACD_screening(all_tickers):
         cross_up_data = find_macd_up_cross_below_zero(symbol, interval)
         cross_down_data = find_macd_down_cross_above_zero(symbol, interval)
         if cross_up_data is not None:
-            up_results.append({"symbol":symbol,"ATR interval":interval,"period average EMA slope":trend, "close slope average":diff})
+            up_results.append({"symbol":symbol,"ATR interval":interval,"period average MA slope":trend, "close slope average":diff})
         if cross_down_data is not None:
-            down_results.append({"symbol":symbol,"ATR interval":interval,"period average EMA slope":trend, "close slope average":diff})
+            down_results.append({"symbol":symbol,"ATR interval":interval,"period average MA slope":trend, "close slope average":diff})
     return up_results,down_results
     # Display results
 

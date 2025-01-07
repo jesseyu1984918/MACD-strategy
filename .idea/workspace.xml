@@ -4,7 +4,12 @@
     <option name="autoReloadType" value="SELECTIVE" />
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="854ee065-639b-45be-bb9a-e4cd29ffeaf7" name="Changes" comment="initial version" />
+    <list default="true" id="854ee065-639b-45be-bb9a-e4cd29ffeaf7" name="Changes" comment="add EMA and average slope function to show">
+      <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/Interval_searching.py" beforeDir="false" afterPath="$PROJECT_DIR$/Interval_searching.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/MACD_screening.py" beforeDir="false" afterPath="$PROJECT_DIR$/MACD_screening.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/stock_center.py" beforeDir="false" afterPath="$PROJECT_DIR$/stock_center.py" afterDir="false" />
+    </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
     <option name="HIGHLIGHT_NON_ACTIVE_CHANGELIST" value="false" />
@@ -29,7 +34,7 @@
   <component name="GithubPullRequestsUISettings">{
   &quot;selectedUrlAndAccountId&quot;: {
     &quot;url&quot;: &quot;https://github.com/jesseyu1984918/MACD-strategy.git&quot;,
-    &quot;accountId&quot;: &quot;502033e3-8abc-4b3f-96c5-6b7db3b19a65&quot;
+    &quot;accountId&quot;: &quot;56379176-0501-4ae5-9c26-6275f4f3c4c8&quot;
   }
 }</component>
   <component name="ProjectColorInfo">{
@@ -49,10 +54,34 @@
     &quot;git-widget-placeholder&quot;: &quot;master&quot;
   }
 }</component>
+  <component name="RunManager">
+    <configuration name="MACD_screening" type="PythonConfigurationType" factoryName="Python" nameIsGenerated="true">
+      <option name="ENV_FILES" value="" />
+      <option name="INTERPRETER_OPTIONS" value="" />
+      <option name="PARENT_ENVS" value="true" />
+      <envs>
+        <env name="PYTHONUNBUFFERED" value="1" />
+      </envs>
+      <option name="SDK_HOME" value="" />
+      <option name="WORKING_DIRECTORY" value="$PROJECT_DIR$" />
+      <option name="IS_MODULE_SDK" value="true" />
+      <option name="ADD_CONTENT_ROOTS" value="true" />
+      <option name="ADD_SOURCE_ROOTS" value="true" />
+      <module name="" />
+      <option name="SCRIPT_NAME" value="$PROJECT_DIR$/MACD_screening.py" />
+      <option name="PARAMETERS" value="" />
+      <option name="SHOW_COMMAND_LINE" value="false" />
+      <option name="EMULATE_TERMINAL" value="false" />
+      <option name="MODULE_MODE" value="false" />
+      <option name="REDIRECT_INPUT" value="false" />
+      <option name="INPUT_FILE" value="" />
+      <method v="2" />
+    </configuration>
+  </component>
   <component name="SharedIndexes">
     <attachedChunks>
       <set>
-        <option value="bundled-python-sdk-d28990e2f31a-aa17d162503b-com.jetbrains.pycharm.community.sharedIndexes.bundled-PC-243.21565.126" />
+        <option value="bundled-python-sdk-1b1018131e27-aa17d162503b-com.jetbrains.pycharm.community.sharedIndexes.bundled-PC-243.22562.180" />
       </set>
     </attachedChunks>
   </component>
@@ -89,11 +118,29 @@
       <option name="project" value="LOCAL" />
       <updated>1734584482917</updated>
     </task>
-    <option name="localTasksCounter" value="4" />
+    <task id="LOCAL-00004" summary="add GUI and interval searching">
+      <option name="closed" value="true" />
+      <created>1735270604090</created>
+      <option name="number" value="00004" />
+      <option name="presentableId" value="LOCAL-00004" />
+      <option name="project" value="LOCAL" />
+      <updated>1735270604090</updated>
+    </task>
+    <task id="LOCAL-00005" summary="add EMA and average slope function to show">
+      <option name="closed" value="true" />
+      <created>1735453003454</created>
+      <option name="number" value="00005" />
+      <option name="presentableId" value="LOCAL-00005" />
+      <option name="project" value="LOCAL" />
+      <updated>1735453003454</updated>
+    </task>
+    <option name="localTasksCounter" value="6" />
     <servers />
   </component>
   <component name="VcsManagerConfiguration">
     <MESSAGE value="initial version" />
-    <option name="LAST_COMMIT_MESSAGE" value="initial version" />
+    <MESSAGE value="add GUI and interval searching" />
+    <MESSAGE value="add EMA and average slope function to show" />
+    <option name="LAST_COMMIT_MESSAGE" value="add EMA and average slope function to show" />
   </component>
 </project>
