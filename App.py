@@ -269,7 +269,7 @@ def confidence_flag(pack: dict) -> tuple[str, int, list[str]]:
     else:
         slope_pct = pack.get("MA20_slope_pct", float("nan"))
 
-        reasons.append(f"+ MA20 slope <= 0 ({slope_pct:.2f}% / day)")
+        reasons.append(f"+ MA20 slope <= 0 ({slope:.2f} / day)")
 
     # Gate 3: UDR10 bias
     print(pack.get("UDR10", float("nan")))
@@ -464,8 +464,8 @@ def label(p, base):
 st.subheader("📊 Next-week large-move risk (research)")
 
 st.write(
-    f"↑ **Upside ≥ +3%**: {p_up:.1%} ({label(p_up, BASE_UP)})  \n"
-    f"↓ **Downside ≤ −3%**: {p_down:.1%} ({label(p_down, BASE_DOWN)})"
+    f"↑ **Upside ≥ +3%**: {p_up:.1%} ({label(p_up, BASE_UP)}, base 22.6%)  \n"
+    f"↓ **Downside ≤ −3%**: {p_down:.1%} ({label(p_down, BASE_DOWN)}, base 19.6%)"
 )
 
 st.caption("Probabilities are pooled, weekly-horizon risk estimates. Research only.")
