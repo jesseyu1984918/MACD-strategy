@@ -4,6 +4,7 @@ from io import StringIO
 from tempfile import NamedTemporaryFile
 
 import altair as alt
+import numpy as np
 import pandas as pd
 import streamlit as st
 
@@ -13,6 +14,8 @@ import macro_market_status
 import news_sentiment
 import position_exit_review
 import scanner
+import system_signal_backtest
+from trade_guardrails import build_metadata_flags
 
 
 def parse_uploaded_symbols(csv_file) -> list[str]:
@@ -143,6 +146,188 @@ def render_ranked_scanner(symbols: list[str]) -> None:
                 file_name="scanner_blocked.csv",
                 mime="text/csv",
             )
+
+
+def render_one_stock_analysis() -> None:
+    st.subheader("One Stock Analysis")
+    st.write("Run the ranked scanner logic on a single ticker, show the current result, and back-calculate its historical WScore over time.")
+
+    symbol = st.text_input("Enter one ticker:", value="AAPL", key="single_stock_symbol").strip().upper()
+
+    if st.button("Run One Stock Analysis"):
+        if not symbol:
+            st.error("Enter a ticker first.")
+            return
+
+        ranked_df, blocked_df = scanner.run_scanner([symbol])
+
+        if not ranked_df.empty:
+            st.success(f"{symbol} passed the screen.")
+            st.dataframe(ranked_df)
+            row = ranked_df.iloc[0]
+            st.metric("WScore", f"{row['Score']:.3f}")
+            st.caption(
+                f"Signal: {row['SignalType']} | Trade action: {row['TradeAction']} | "
+                f"Macro regime: {row['MacroRegime']}"
+            )
+            return
+
+        st.warning(f"{symbol} did not pass the screen.")
+        if not blocked_df.empty:
+            st.dataframe(blocked_df)
+            blocked_row = blocked_df[blocked_df["Symbol"] == symbol]
+            if not blocked_row.empty:
+                st.caption(f"Blocked reason: {blocked_row.iloc[0]['blocked_reason']}")
+        else:
+            st.info("No ranked output and no blocked output were returned.")
+
+    st.write("Back-calculated WScore history")
+    hist = scanner.download_symbol(symbol, lookback="2y")
+    if hist is None or hist.empty:
+        st.info(f"Could not load enough price history for {symbol}.")
+        return
+
+    close = pd.DataFrame({symbol: hist["Close"].rename(symbol)}).sort_index()
+    high = pd.DataFrame({symbol: hist["High"].rename(symbol)}).reindex(close.index).ffill()
+    low = pd.DataFrame({symbol: hist["Low"].rename(symbol)}).reindex(close.index).ffill()
+    volume = pd.DataFrame({symbol: hist["Volume"].rename(symbol)}).reindex(close.index).ffill()
+    leveraged_flags = build_metadata_flags([symbol])
+    macro_state = system_signal_backtest.compute_macro_state(close.index)
+    state = system_signal_backtest.compute_scanner_state(close, high, low, volume, leveraged_flags, macro_state)
+
+    history_df = pd.DataFrame(
+        {
+            "Date": close.index,
+            "Close": close[symbol],
+            "WScore": state["raw_score"][symbol],
+            "SignalType": pd.Series(index=close.index, dtype="object"),
+            "Candidate": state["candidate"][symbol],
+            "MacroRegime": macro_state["MacroRegime"].values,
+        }
+    )
+    history_df.loc[state["setup_candidate"][symbol].fillna(False), "SignalType"] = "SETUP"
+    history_df.loc[state["breakout_candidate"][symbol].fillna(False), "SignalType"] = "BREAKOUT"
+    cutoff_date = pd.Timestamp.now().normalize() - pd.DateOffset(months=6)
+    history_df = history_df[history_df["Date"] >= cutoff_date].copy()
+    history_df = history_df.reset_index(drop=True)
+
+    if history_df.empty:
+        st.info(f"No back-calculated history was available for {symbol} during the last six months.")
+        return
+
+    exit_state = system_signal_backtest.compute_exit_state(close, volume)
+    exit_weights: list[float] = []
+    exit_recommendations: list[str] = []
+    for row in history_df.itertuples(index=False):
+        current_date = pd.Timestamp(row.Date)
+        review_row = pd.Series(
+            {
+                "Side": "LONG",
+                "LastPrice": float(row.Close),
+                "MA20": exit_state["ma20"].at[current_date, symbol],
+                "MA50": exit_state["ma50"].at[current_date, symbol],
+                "MA150": exit_state["ma150"].at[current_date, symbol],
+                "PnLPct": np.nan,
+                "Runup10dPct": exit_state["runup_10d_pct"].at[current_date, symbol],
+                "AvgDollarVol20dM": (
+                    exit_state["avg_dollar_vol_20d"].at[current_date, symbol] / 1_000_000
+                    if pd.notna(exit_state["avg_dollar_vol_20d"].at[current_date, symbol])
+                    else np.nan
+                ),
+                "MACDHist": exit_state["macd_hist"].at[current_date, symbol],
+                "MA20Slope": exit_state["ma20_slope"].at[current_date, symbol],
+                "BreakoutAge": state["breakout_age"].at[current_date, symbol],
+                "DistFromMA20Pct": state["extension_from_ma20"].at[current_date, symbol] * 100,
+                "DistFromBreakoutPct": state["extension_from_breakout"].at[current_date, symbol] * 100,
+                "ScannerScore": state["raw_score"].at[current_date, symbol],
+                "ScannerTrend": state["trend"].at[current_date, symbol],
+                "ScannerSignalType": row.SignalType if pd.notna(row.SignalType) else "",
+            }
+        )
+        macro_snapshot = {
+            "regime": macro_state.loc[current_date, "MacroRegime"],
+            "score": macro_state.loc[current_date, "MacroScore"],
+            "scanner_multiplier": macro_state.loc[current_date, "ScannerMultiplier"],
+            "exit_review_threshold_shift": macro_state.loc[current_date, "ExitReviewThresholdShift"],
+        }
+        recommendation, _ = position_exit_review.build_recommendation(
+            review_row,
+            bool(leveraged_flags.get(symbol, False)),
+            macro_snapshot,
+        )
+        exit_pressure = position_exit_review.build_exit_pressure(
+            review_row,
+            bool(leveraged_flags.get(symbol, False)),
+            macro_snapshot,
+        )
+        exit_recommendations.append(recommendation)
+        exit_weights.append(exit_pressure)
+
+    history_df["ExitRecommendation"] = exit_recommendations
+    history_df["ExitWeight"] = exit_weights
+
+    score_line = (
+        alt.Chart(history_df)
+        .mark_line(point=True)
+        .encode(
+            x=alt.X("Date:T", title=None),
+            y=alt.Y("WScore:Q", title="WScore"),
+            color=alt.value("#1f77b4"),
+            tooltip=["Date:T", "Close:Q", "WScore:Q", "SignalType:N", "Candidate:N", "MacroRegime:N"],
+        )
+        .properties(height=300)
+    )
+    candidate_points = (
+        alt.Chart(history_df[history_df["Candidate"].fillna(False)])
+        .mark_circle(size=70)
+        .encode(
+            x=alt.X("Date:T", title=None),
+            y=alt.Y("WScore:Q", title="WScore"),
+            color=alt.Color("SignalType:N", title="Signal"),
+            tooltip=["Date:T", "Close:Q", "WScore:Q", "SignalType:N", "MacroRegime:N"],
+        )
+    )
+    st.altair_chart(score_line + candidate_points, use_container_width=True)
+
+    price_chart = (
+        alt.Chart(history_df)
+        .mark_line()
+        .encode(
+            x=alt.X("Date:T", title=None),
+            y=alt.Y(
+                "Close:Q",
+                title="Close",
+                scale=alt.Scale(
+                    domain=[
+                        float(history_df["Close"].min()) - max((float(history_df["Close"].max()) - float(history_df["Close"].min())) * 0.05, 0.5),
+                        float(history_df["Close"].max()) + max((float(history_df["Close"].max()) - float(history_df["Close"].min())) * 0.05, 0.5),
+                    ]
+                ),
+            ),
+            color=alt.value("#2E6F40"),
+            tooltip=["Date:T", "Close:Q", "WScore:Q", "SignalType:N", "MacroRegime:N"],
+        )
+        .properties(height=260)
+    )
+    st.altair_chart(price_chart, use_container_width=True)
+
+    exit_chart = (
+        alt.Chart(history_df)
+        .mark_line(point=True)
+        .encode(
+            x=alt.X("Date:T", title=None),
+            y=alt.Y(
+                "ExitWeight:Q",
+                title="Exit Weight",
+                scale=alt.Scale(domain=[0, 1]),
+            ),
+            color=alt.Color("ExitRecommendation:N", title="Exit View"),
+            tooltip=["Date:T", "ExitWeight:Q", "ExitRecommendation:N", "WScore:Q", "Close:Q"],
+        )
+        .properties(height=260)
+    )
+    st.altair_chart(exit_chart, use_container_width=True)
+    st.dataframe(history_df.sort_values("Date", ascending=False))
 
 
 def render_position_exit_review() -> None:
@@ -289,6 +474,7 @@ def main() -> None:
         "Choose an analysis function:",
         (
             "Ranked Scanner",
+            "One Stock Analysis",
             "Ranking History",
             "Macro Market Status",
             "MACD Screening",
@@ -309,6 +495,8 @@ def main() -> None:
 
     if analysis_choice == "Ranked Scanner":
         render_ranked_scanner(symbols)
+    elif analysis_choice == "One Stock Analysis":
+        render_one_stock_analysis()
     elif analysis_choice == "Ranking History":
         render_ranking_history()
     elif analysis_choice == "Macro Market Status":

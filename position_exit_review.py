@@ -333,11 +333,11 @@ def download_history(symbol: str) -> pd.DataFrame | None:
         return None
 
 
-def build_recommendation(
+def assess_exit_state(
     row: pd.Series,
     leveraged_flag: bool,
     macro_snapshot: dict[str, object],
-) -> tuple[str, str]:
+) -> dict[str, object]:
     reasons: list[str] = []
     exit_flags = 0
     review_flags = 0
@@ -444,20 +444,68 @@ def build_recommendation(
             review_flags += 1
             reasons.append("short_losing_momentum_edge")
 
+    unique_reasons = "; ".join(dict.fromkeys(reasons))
     if exit_flags >= 2:
-        return "EXIT", "; ".join(dict.fromkeys(reasons))
-    if profit_protection_triggered:
-        return "EXIT", "; ".join(dict.fromkeys(reasons))
-    if exit_flags == 1 or review_flags >= 1:
-        return "REVIEW", "; ".join(dict.fromkeys(reasons))
-    if row["Side"] == "LONG":
+        recommendation = "EXIT"
+        reason = unique_reasons
+    elif profit_protection_triggered:
+        recommendation = "EXIT"
+        reason = unique_reasons
+    elif exit_flags == 1 or review_flags >= 1:
+        recommendation = "REVIEW"
+        reason = unique_reasons
+    elif row["Side"] == "LONG":
         if pd.notna(row.get("ScannerScore", np.nan)) and row.get("ScannerScore", np.nan) < hold_threshold:
-            return "REVIEW", "scanner_hold_quality_marginal"
-        if row.get("ScannerSignalType") == "SETUP":
-            return "HOLD", "scanner_setup_still_valid"
-        if row.get("ScannerSignalType") == "BREAKOUT":
-            return "HOLD", "scanner_breakout_still_valid"
-    return "HOLD", "trend_and_momentum_still_support_position"
+            recommendation = "REVIEW"
+            reason = "scanner_hold_quality_marginal"
+        elif row.get("ScannerSignalType") == "SETUP":
+            recommendation = "HOLD"
+            reason = "scanner_setup_still_valid"
+        elif row.get("ScannerSignalType") == "BREAKOUT":
+            recommendation = "HOLD"
+            reason = "scanner_breakout_still_valid"
+        else:
+            recommendation = "HOLD"
+            reason = "trend_and_momentum_still_support_position"
+    else:
+        recommendation = "HOLD"
+        reason = "trend_and_momentum_still_support_position"
+
+    exit_pressure = float(np.clip(0.32 * exit_flags + 0.12 * review_flags + (0.22 if profit_protection_triggered else 0.0), 0.0, 1.0))
+    if recommendation == "HOLD":
+        exit_pressure = min(exit_pressure, 0.35)
+    elif recommendation == "REVIEW":
+        exit_pressure = max(exit_pressure, 0.4)
+        exit_pressure = min(exit_pressure, 0.79)
+    else:
+        exit_pressure = max(exit_pressure, 0.8)
+
+    return {
+        "recommendation": recommendation,
+        "reason": reason,
+        "exit_pressure": round(exit_pressure, 3),
+        "exit_flags": exit_flags,
+        "review_flags": review_flags,
+        "profit_protection_triggered": profit_protection_triggered,
+    }
+
+
+def build_recommendation(
+    row: pd.Series,
+    leveraged_flag: bool,
+    macro_snapshot: dict[str, object],
+) -> tuple[str, str]:
+    assessment = assess_exit_state(row, leveraged_flag, macro_snapshot)
+    return str(assessment["recommendation"]), str(assessment["reason"])
+
+
+def build_exit_pressure(
+    row: pd.Series,
+    leveraged_flag: bool,
+    macro_snapshot: dict[str, object],
+) -> float:
+    assessment = assess_exit_state(row, leveraged_flag, macro_snapshot)
+    return float(assessment["exit_pressure"])
 
 
 def build_option_recommendation(row: pd.Series) -> tuple[str, str]:

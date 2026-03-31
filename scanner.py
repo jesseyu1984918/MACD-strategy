@@ -198,9 +198,9 @@ def load_rank_history_df(history_path: str = RANK_HISTORY_OUTPUT) -> pd.DataFram
     return history_df
 
 
-def download_symbol(symbol: str) -> pd.DataFrame | None:
+def download_symbol(symbol: str, lookback: str = LOOKBACK) -> pd.DataFrame | None:
     try:
-        df = yf.download(symbol, period=LOOKBACK, interval="1d", auto_adjust=False, progress=False)
+        df = yf.download(symbol, period=lookback, interval="1d", auto_adjust=False, progress=False)
         df = flatten_columns(df)
         if df is None or df.empty:
             print(f"BAD  {symbol} fetch returned no rows")
