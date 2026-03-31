@@ -1,12 +1,17 @@
 from __future__ import annotations
 
 from io import StringIO
+from tempfile import NamedTemporaryFile
 
+import altair as alt
 import pandas as pd
 import streamlit as st
 
 import Interval_searching as Is
 import MACD_screening as MACD
+import macro_market_status
+import news_sentiment
+import position_exit_review
 import scanner
 
 
@@ -75,15 +80,57 @@ def render_atr_finder(symbols: list[str]) -> None:
 
 def render_ranked_scanner(symbols: list[str]) -> None:
     st.subheader("Ranked Scanner")
-    st.write("Rank fresh setups and breakouts, then show exactly why other symbols were blocked.")
+    st.write("Rank fresh setups and breakouts, store a dated snapshot, and show how ranks moved versus the previous run.")
+    st.markdown(
+        """
+        **Principles**
+
+        - The scanner is designed for long ideas that are already in trend, liquid enough to trade, and not overly extended.
+        - It looks for two states: `SETUP` names sitting close to a breakout pivot, and `BREAKOUT` names that cleared the pivot recently and are still controlled.
+        - It now runs in a higher-conviction mode. Besides the normal trend, liquidity, and extension checks, names must also show 20-day relative strength versus `SPY` and `QQQ`.
+        - It blocks names that are too illiquid, too cheap, too hot, too stretched from the 20-day average, too far below the 20-day average, structurally out of trend, or too weak versus the major indexes.
+        - Macro market status is now part of the process. `Risk-on` slightly boosts scanner scores, `Risk-off` suppresses them, so the list is more regime-aware.
+        """
+    )
+    st.markdown(
+        """
+        **Weighted Score Guide**
+
+        `Score` is the weighted scanner score, or `WScore`. Higher is better, but it is a ranking tool, not a standalone buy signal.
+
+        - `0.60+`: stronger quality. Trend, tightness, and location are generally aligned.
+        - `0.40` to `0.60`: usable but more mixed. Usually needs cleaner price action or better market support.
+        - Below `0.40`: weak quality. Treat as lower-priority unless there is a very specific reason.
+
+        What drives the score:
+
+        - proximity to the breakout pivot
+        - price tightness versus longer-term ATR
+        - trend strength from the 50-day versus 150-day averages
+        - how stretched price is from the 20-day average
+        - how far price is above the breakout level
+        - breakout freshness
+        - whether the name is still a `SETUP` or already a `BREAKOUT`
+        - current macro regime
+
+        What is not inside `WScore` but is still required:
+
+        - at least about `+5%` relative strength versus `SPY` over 20 trading days
+        - non-negative relative strength versus `QQQ` over 20 trading days
+        """
+    )
 
     if st.button("Run Ranked Scanner"):
         ranked_df, blocked_df = scanner.run_scanner(symbols)
+        ranked_df, blocked_df = scanner.persist_rank_history(ranked_df, blocked_df, source_label="stock_center")
 
         st.write(f"Date: {pd.Timestamp.now().date()}")
         st.write(f"Ranked candidates: {len(ranked_df)}")
         st.write("Top ranked candidates")
         st.dataframe(ranked_df)
+
+        if not ranked_df.empty:
+            st.write(f"Rank history saved to {scanner.RANK_HISTORY_OUTPUT}")
 
         st.write("Blocked symbols")
         st.dataframe(blocked_df)
@@ -98,13 +145,157 @@ def render_ranked_scanner(symbols: list[str]) -> None:
             )
 
 
+def render_position_exit_review() -> None:
+    st.subheader("Position Exit Review")
+    st.write("Upload your transaction history export and get HOLD / REVIEW / EXIT suggestions for open positions.")
+    txn_file = st.file_uploader("Upload transaction history CSV", type=["csv"], key="txn_history")
+
+    if st.button("Run Position Exit Review"):
+        if txn_file is None:
+            st.error("Upload a transaction history CSV first.")
+            return
+
+        with NamedTemporaryFile(delete=False, suffix=".csv") as tmp_file:
+            tmp_file.write(txn_file.getvalue())
+            tmp_path = tmp_file.name
+
+        review_df = position_exit_review.review_positions_from_csv(tmp_path)
+        st.write(f"Open positions reviewed: {len(review_df)}")
+        st.dataframe(review_df)
+
+        if not review_df.empty:
+            csv_bytes = review_df.to_csv(index=False).encode("utf-8")
+            st.download_button(
+                "Download position review CSV",
+                data=csv_bytes,
+                file_name="position_exit_review.csv",
+                mime="text/csv",
+            )
+
+
+def render_news_sentiment(symbols: list[str]) -> None:
+    st.subheader("News Sentiment")
+    st.write("Fetch recent Yahoo Finance headlines and score each symbol from 0 to 10.")
+
+    if st.button("Run News Sentiment"):
+        news_df = news_sentiment.get_symbol_news_sentiment_df(symbols)
+        st.dataframe(news_df)
+
+        if not news_df.empty:
+            csv_bytes = news_df.to_csv(index=False).encode("utf-8")
+            st.download_button(
+                "Download news sentiment CSV",
+                data=csv_bytes,
+                file_name="news_sentiment.csv",
+                mime="text/csv",
+            )
+
+
+def render_macro_market_status() -> None:
+    st.subheader("Macro Market Status")
+    st.write("Check the broad market trend, volatility backdrop, and risk appetite before acting on individual setups.")
+
+    if st.button("Run Macro Market Status"):
+        macro_df = macro_market_status.build_macro_status_df()
+        macro_trend_df = macro_market_status.build_macro_trend_df()
+        summary = macro_market_status.build_macro_summary(macro_df)
+
+        col1, col2, col3 = st.columns(3)
+        col1.caption("Market Regime")
+        col1.write(summary["regime"])
+        col2.caption("Trend")
+        col2.write(summary["trend"])
+        col3.caption("Risk")
+        col3.write(summary["risk"])
+
+        if not macro_trend_df.empty:
+            st.write("Trend view")
+            chart_columns = st.columns(2)
+            for idx, column_name in enumerate(macro_trend_df.columns):
+                series_df = macro_trend_df[[column_name]].dropna().reset_index()
+                series_df.columns = ["Date", "Value"]
+                y_min = float(series_df["Value"].min())
+                y_max = float(series_df["Value"].max())
+                padding = max((y_max - y_min) * 0.08, max(abs(y_max) * 0.01, 0.01))
+                chart = (
+                    alt.Chart(series_df)
+                    .mark_line()
+                    .encode(
+                        x=alt.X("Date:T", title=None),
+                        y=alt.Y(
+                            "Value:Q",
+                            title=None,
+                            scale=alt.Scale(domain=[y_min - padding, y_max + padding]),
+                        ),
+                    )
+                    .properties(height=180)
+                )
+                chart_columns[idx % 2].caption(column_name)
+                chart_columns[idx % 2].altair_chart(chart, use_container_width=True)
+
+        st.write("Macro dashboard")
+        st.dataframe(macro_df)
+
+        if not macro_df.empty:
+            csv_bytes = macro_df.to_csv(index=False).encode("utf-8")
+            st.download_button(
+                "Download macro market status CSV",
+                data=csv_bytes,
+                file_name="macro_market_status.csv",
+                mime="text/csv",
+            )
+
+
+def render_ranking_history() -> None:
+    st.subheader("Ranking History")
+    st.write("Review timestamped ranking snapshots and see how each symbol moved over time.")
+
+    if not pd.io.common.file_exists(scanner.RANK_HISTORY_OUTPUT):
+        st.info("No ranking history yet. Run the Ranked Scanner first.")
+        return
+
+    history_df = pd.read_csv(scanner.RANK_HISTORY_OUTPUT)
+    if history_df.empty:
+        st.info("Ranking history file is empty.")
+        return
+
+    history_df["RunTimestamp"] = pd.to_datetime(history_df["RunTimestamp"], errors="coerce")
+    symbols = sorted(history_df["Symbol"].dropna().unique().tolist())
+    selected_symbol = st.selectbox("Filter by symbol", options=["All"] + symbols, index=0)
+
+    filtered_df = history_df if selected_symbol == "All" else history_df[history_df["Symbol"] == selected_symbol].copy()
+    filtered_df = filtered_df.sort_values(["RunTimestamp", "Rank"])
+
+    st.write(f"Snapshots loaded: {filtered_df['RunTimestamp'].nunique()}")
+    st.dataframe(filtered_df)
+
+    if selected_symbol != "All":
+        st.line_chart(filtered_df.set_index("RunTimestamp")["Rank"])
+
+    csv_bytes = filtered_df.to_csv(index=False).encode("utf-8")
+    st.download_button(
+        "Download ranking history CSV",
+        data=csv_bytes,
+        file_name="scanner_rank_history_filtered.csv",
+        mime="text/csv",
+    )
+
+
 def main() -> None:
     st.title("Stock Pick Panel")
     st.write("Use the sidebar to select which analysis you want to run.")
 
     analysis_choice = st.sidebar.radio(
         "Choose an analysis function:",
-        ("Ranked Scanner", "MACD Screening", "ATR Finder"),
+        (
+            "Ranked Scanner",
+            "Ranking History",
+            "Macro Market Status",
+            "MACD Screening",
+            "ATR Finder",
+            "Position Exit Review",
+            "News Sentiment",
+        ),
     )
 
     tickers_input = st.text_input(
@@ -118,10 +309,18 @@ def main() -> None:
 
     if analysis_choice == "Ranked Scanner":
         render_ranked_scanner(symbols)
+    elif analysis_choice == "Ranking History":
+        render_ranking_history()
+    elif analysis_choice == "Macro Market Status":
+        render_macro_market_status()
     elif analysis_choice == "MACD Screening":
         render_macd_screening(symbols)
-    else:
+    elif analysis_choice == "ATR Finder":
         render_atr_finder(symbols)
+    elif analysis_choice == "Position Exit Review":
+        render_position_exit_review()
+    else:
+        render_news_sentiment(symbols)
 
 
 if __name__ == "__main__":
