@@ -13,7 +13,8 @@ import numpy as np
 import pandas as pd
 import yfinance as yf
 
-from macro_market_status import get_macro_regime_snapshot
+import scanner
+from macro_market_status import download_macro_history, get_macro_regime_snapshot
 from news_sentiment import get_symbol_news_sentiment
 from scanner import MAX_BREAKOUT_AGE, MAX_BREAKOUT_EXTENSION, SETUP_PROXIMITY, bars_since_true
 from trade_guardrails import MAX_ABOVE_MA20_PCT, build_metadata_flags, flatten_columns
@@ -26,6 +27,9 @@ OUTPUT_FILE = "position_exit_review.csv"
 # about the 20th percentile for weak holds and the 50th percentile for solid holds.
 EXIT_REVIEW_SCORE_REVIEW_THRESHOLD = 0.40
 EXIT_REVIEW_SCORE_HOLD_THRESHOLD = 0.56
+
+
+_BENCHMARK_SCORE_CACHE: dict[str, pd.Series] = {}
 
 
 def parse_args() -> argparse.Namespace:
@@ -292,9 +296,42 @@ def download_history(symbol: str) -> pd.DataFrame | None:
         hist["breakout_candidate"] = (
             hist["scanner_trend"]
             & hist["fresh_breakout"]
+            & (hist["Close"] >= hist["prior_hh50"])
             & hist["controlled_breakout"]
             & hist["not_extended"]
             & hist["pullback_zone"]
+        )
+        hist["momentum_candidate"] = (
+            hist["scanner_trend"]
+            & hist["fresh_breakout"]
+            & (hist["Close"] >= hist["prior_hh50"])
+            & (hist["extension_from_ma20"] <= (scanner.MOMENTUM_MAX_ABOVE_MA20_PCT / 100))
+            & (hist["runup_10d_pct"] <= scanner.MOMENTUM_MAX_10D_RUNUP_PCT)
+        )
+        hist["leader_candidate"] = (
+            hist["scanner_trend"]
+            & (hist["breakout_age"] <= scanner.LEADER_MAX_BREAKOUT_AGE)
+            & (hist["Close"] >= hist["prior_hh50"])
+            & (hist["Close"] > hist["ma20"])
+            & (hist["extension_from_ma20"] >= 0)
+            & (hist["extension_from_ma20"] <= (scanner.LEADER_MAX_ABOVE_MA20_PCT / 100))
+            & (hist["runup_10d_pct"] <= scanner.LEADER_MAX_10D_RUNUP_PCT)
+        )
+        hist["reclaim_candidate"] = (
+            (hist["ma50"] >= hist["ma150"] * 0.97)
+            & (hist["Close"] > hist["ma20"])
+            & (hist["ma20"] >= hist["ma20"].shift(3) * 0.995)
+            & (hist["Close"] >= hist["Close"].rolling(10).max().shift(1))
+            & (hist["extension_from_ma20"] >= 0)
+            & (hist["extension_from_ma20"] <= (scanner.RECLAIM_MAX_ABOVE_MA20_PCT / 100))
+            & (hist["runup_10d_pct"] <= scanner.RECLAIM_MAX_10D_RUNUP_PCT)
+        )
+        hist["momentum_candidate"] = hist["momentum_candidate"] & ~(hist["setup_candidate"] | hist["breakout_candidate"])
+        hist["leader_candidate"] = hist["leader_candidate"] & ~(
+            hist["setup_candidate"] | hist["breakout_candidate"] | hist["momentum_candidate"]
+        )
+        hist["reclaim_candidate"] = hist["reclaim_candidate"] & ~(
+            hist["setup_candidate"] | hist["breakout_candidate"] | hist["momentum_candidate"] | hist["leader_candidate"]
         )
 
         prev_close = hist["Close"].shift(1)
@@ -308,7 +345,10 @@ def download_history(symbol: str) -> pd.DataFrame | None:
         hist["tr"] = np.nanmax(tr_components, axis=1)
         hist["atr20"] = hist["tr"].rolling(20).mean()
         hist["atr200"] = hist["tr"].rolling(200).mean()
-        hist["tightness"] = (1 - hist["atr20"] / hist["atr200"]).clip(0, 1)
+        hist["atr100"] = hist["tr"].rolling(100).mean()
+        hist["atr60"] = hist["tr"].rolling(60).mean()
+        atr_baseline = hist["atr200"].combine_first(hist["atr100"]).combine_first(hist["atr60"])
+        hist["tightness"] = (1 - hist["atr20"] / atr_baseline).clip(0, 1)
         hist["setup_readiness"] = (
             1 - (((hist["prior_hh50"] - hist["Close"]) / hist["prior_hh50"]).clip(lower=0) / SETUP_PROXIMITY).clip(lower=0, upper=1)
         )
@@ -318,8 +358,103 @@ def download_history(symbol: str) -> pd.DataFrame | None:
             1 - (hist["extension_from_breakout"].clip(lower=0) / MAX_BREAKOUT_EXTENSION).clip(lower=0, upper=1)
         )
         hist["freshness_score"] = (1 - (hist["breakout_age"] / MAX_BREAKOUT_AGE).clip(lower=0, upper=1)).fillna(0)
-        hist["signal_type_bonus"] = hist["setup_candidate"].astype(float) * 1.0 + hist["breakout_candidate"].astype(float) * 0.7
-        hist["scanner_score"] = (
+        hist["signal_type_bonus"] = (
+            hist["setup_candidate"].astype(float) * 1.0
+            + hist["breakout_candidate"].astype(float) * 0.7
+            + hist["momentum_candidate"].astype(float) * 0.55
+            + hist["leader_candidate"].astype(float) * 0.5
+            + hist["reclaim_candidate"].astype(float) * 0.45
+        )
+        hist["scanner_signal_type"] = ""
+        hist.loc[hist["reclaim_candidate"], "scanner_signal_type"] = "RECLAIM"
+        hist.loc[hist["leader_candidate"], "scanner_signal_type"] = "LEADER"
+        hist.loc[hist["momentum_candidate"], "scanner_signal_type"] = "MOMENTUM"
+        hist.loc[hist["breakout_candidate"], "scanner_signal_type"] = "BREAKOUT"
+        hist.loc[hist["setup_candidate"], "scanner_signal_type"] = "SETUP"
+        spy_series = _BENCHMARK_SCORE_CACHE.get("SPY")
+        if spy_series is None:
+            spy_hist = download_macro_history("SPY")
+            spy_series = spy_hist["change_20d_pct"] if spy_hist is not None and not spy_hist.empty and "change_20d_pct" in spy_hist.columns else pd.Series(dtype=float)
+            _BENCHMARK_SCORE_CACHE["SPY"] = spy_series
+        qqq_series = _BENCHMARK_SCORE_CACHE.get("QQQ")
+        if qqq_series is None:
+            qqq_hist = download_macro_history("QQQ")
+            qqq_series = qqq_hist["change_20d_pct"] if qqq_hist is not None and not qqq_hist.empty and "change_20d_pct" in qqq_hist.columns else pd.Series(dtype=float)
+            _BENCHMARK_SCORE_CACHE["QQQ"] = qqq_series
+
+        hist["rs_vs_spy_20d"] = hist["Close"].pct_change(20) * 100 - spy_series.reindex(hist.index)
+        hist["rs_vs_qqq_20d"] = hist["Close"].pct_change(20) * 100 - qqq_series.reindex(hist.index)
+
+        reclaim_trend_strength = ((hist["ma50"] / hist["ma150"]) - 0.97).clip(lower=0, upper=0.08) / 0.08
+        reclaim_rs_strength = (
+            (scanner.soft_clip_ratio(hist["rs_vs_spy_20d"], -2.0, 5.0))
+            + (scanner.soft_clip_ratio(hist["rs_vs_qqq_20d"], -3.0, 3.0))
+        ) / 2
+        reclaim_extension_score = 1 - (
+            (hist["extension_from_ma20"] - 0.02).abs() / (scanner.RECLAIM_MAX_ABOVE_MA20_PCT / 100)
+        ).clip(lower=0, upper=1)
+        reclaim_trigger_score = ((hist["Close"] / hist["Close"].rolling(10).max().shift(1)) - 1).clip(lower=0, upper=0.03) / 0.03
+        reclaim_score = (
+            0.30 * reclaim_trend_strength
+            + 0.30 * reclaim_rs_strength
+            + 0.25 * reclaim_extension_score
+            + 0.15 * reclaim_trigger_score
+        )
+        reclaim_readiness = (
+            0.25 * scanner.soft_clip_ratio(hist["ma50"] / hist["ma150"], 0.95, 1.01)
+            + 0.20 * scanner.soft_clip_ratio(hist["Close"] / hist["ma20"], 0.99, 1.02)
+            + 0.15 * scanner.soft_clip_ratio(hist["ma20"] / hist["ma20"].shift(3), 0.995, 1.01)
+            + 0.20 * scanner.soft_clip_ratio(hist["rs_vs_spy_20d"], -2.0, 5.0)
+            + 0.20 * scanner.soft_clip_ratio(hist["rs_vs_qqq_20d"], -3.0, 3.0)
+        )
+
+        momentum_rs_strength = (
+            scanner.soft_clip_ratio(hist["rs_vs_spy_20d"] - scanner.MOMENTUM_MIN_RS_VS_SPY_20D, 0, 30)
+            + scanner.soft_clip_ratio(hist["rs_vs_qqq_20d"] - scanner.MOMENTUM_MIN_RS_VS_QQQ_20D, 0, 25)
+        ) / 2
+        momentum_extension_score = 1 - (
+            (hist["extension_from_ma20"] - 0.10).abs() / (scanner.MOMENTUM_MAX_ABOVE_MA20_PCT / 100)
+        ).clip(lower=0, upper=1)
+        momentum_score = (
+            0.28 * hist["trend_strength"]
+            + 0.32 * momentum_rs_strength
+            + 0.20 * momentum_extension_score
+            + 0.10 * hist["breakout_extension_score"]
+            + 0.10 * hist["freshness_score"]
+        )
+        momentum_readiness = (
+            0.25 * scanner.soft_clip_ratio(hist["rs_vs_spy_20d"], 5.0, 20.0)
+            + 0.20 * scanner.soft_clip_ratio(hist["rs_vs_qqq_20d"], 0.0, 15.0)
+            + 0.20 * scanner.soft_clip_ratio(scanner.MAX_BREAKOUT_AGE - hist["breakout_age"], -2.0, 2.0)
+            + 0.15 * scanner.soft_clip_ratio(scanner.MOMENTUM_MAX_10D_RUNUP_PCT - hist["runup_10d_pct"], -10.0, 8.0)
+            + 0.20 * (1 - ((hist["extension_from_ma20"] - 0.10).abs() / 0.15).clip(lower=0, upper=1))
+        )
+
+        leader_rs_strength = (
+            scanner.soft_clip_ratio(hist["rs_vs_spy_20d"] - scanner.LEADER_MIN_RS_VS_SPY_20D, 0, 20)
+            + scanner.soft_clip_ratio(hist["rs_vs_qqq_20d"] - scanner.LEADER_MIN_RS_VS_QQQ_20D, 0, 15)
+        ) / 2
+        leader_extension_score = 1 - ((hist["extension_from_ma20"] - 0.09).abs() / 0.10).clip(lower=0, upper=1)
+        leader_proximity_score = 1 - (((-hist["extension_from_breakout"]).clip(lower=0)) / 0.30).clip(lower=0, upper=1)
+        leader_persistence_score = 1 - (hist["breakout_age"] / scanner.LEADER_MAX_BREAKOUT_AGE).clip(lower=0, upper=1)
+        leader_score = (
+            0.18 * hist["trend_strength"]
+            + 0.40 * leader_rs_strength
+            + 0.18 * leader_extension_score
+            + 0.10 * leader_proximity_score
+            + 0.08 * leader_persistence_score
+            + 0.12
+        )
+        leader_readiness = (
+            0.18 * scanner.soft_clip_ratio(hist["ma50"] / hist["ma150"], 0.98, 1.06)
+            + 0.30 * scanner.soft_clip_ratio(hist["rs_vs_spy_20d"], 2.0, 18.0)
+            + 0.20 * scanner.soft_clip_ratio(hist["rs_vs_qqq_20d"], 0.0, 12.0)
+            + 0.17 * (1 - ((hist["extension_from_ma20"] - 0.09).abs() / 0.14).clip(lower=0, upper=1))
+            + 0.08 * (1 - (((-hist["extension_from_breakout"]).clip(lower=0)) / 0.35).clip(lower=0, upper=1))
+            + 0.07 * scanner.soft_clip_ratio(scanner.LEADER_MAX_BREAKOUT_AGE - hist["breakout_age"], 0.0, 25.0)
+        )
+
+        base_score = (
             0.28 * hist["setup_readiness"]
             + 0.20 * hist["tightness"]
             + 0.18 * hist["trend_strength"]
@@ -328,6 +463,15 @@ def download_history(symbol: str) -> pd.DataFrame | None:
             + 0.06 * hist["freshness_score"]
             + 0.06 * hist["signal_type_bonus"]
         )
+        hist["scanner_score"] = pd.concat(
+            [
+                base_score.rename("base"),
+                (reclaim_score * reclaim_readiness).rename("reclaim"),
+                (momentum_score * momentum_readiness).rename("momentum"),
+                (leader_score * leader_readiness).rename("leader"),
+            ],
+            axis=1,
+        ).max(axis=1)
         return hist
     except Exception:
         return None
@@ -346,6 +490,7 @@ def assess_exit_state(
     macro_regime = str(macro_snapshot["regime"])
     review_threshold = EXIT_REVIEW_SCORE_REVIEW_THRESHOLD + threshold_shift
     hold_threshold = EXIT_REVIEW_SCORE_HOLD_THRESHOLD + threshold_shift
+    strategy_preset = str(row.get("StrategyPreset", "classic"))
 
     if leveraged_flag:
         review_flags += 1
@@ -363,6 +508,10 @@ def assess_exit_state(
         scanner_score = row.get("ScannerScore", np.nan)
 
         has_cost_basis = pd.notna(row["PnLPct"])
+
+        if strategy_preset == "best_breakout" and not bool(row.get("PresetBreakoutActive", False)):
+            review_flags += 1
+            reasons.append("no_longer_meets_best_breakout_profile")
 
         if macro_regime == "Risk-off" and scanner_signal_type in {"SETUP", "BREAKOUT"}:
             review_flags += 1
@@ -464,6 +613,15 @@ def assess_exit_state(
         elif row.get("ScannerSignalType") == "BREAKOUT":
             recommendation = "HOLD"
             reason = "scanner_breakout_still_valid"
+        elif row.get("ScannerSignalType") == "RECLAIM":
+            recommendation = "HOLD"
+            reason = "scanner_reclaim_still_valid"
+        elif row.get("ScannerSignalType") == "MOMENTUM":
+            recommendation = "HOLD"
+            reason = "scanner_momentum_still_valid"
+        elif row.get("ScannerSignalType") == "LEADER":
+            recommendation = "HOLD"
+            reason = "scanner_leader_still_valid"
         else:
             recommendation = "HOLD"
             reason = "trend_and_momentum_still_support_position"
@@ -552,7 +710,59 @@ def build_option_recommendation(row: pd.Series) -> tuple[str, str]:
     return "HOLD", "underlying_trend_still_supports_option"
 
 
-def review_positions(positions: pd.DataFrame) -> pd.DataFrame:
+def apply_strategy_preset_to_review_row(
+    review_row: pd.Series,
+    hist_last: pd.Series,
+    strategy_preset: str,
+) -> pd.Series:
+    if strategy_preset != "best_breakout":
+        return review_row
+
+    close = float(hist_last["Close"]) if pd.notna(hist_last["Close"]) else np.nan
+    ma20 = float(hist_last["ma20"]) if pd.notna(hist_last["ma20"]) else np.nan
+    ma50 = float(hist_last["ma50"]) if pd.notna(hist_last["ma50"]) else np.nan
+    prior_hh50 = float(hist_last["prior_hh50"]) if pd.notna(hist_last["prior_hh50"]) else np.nan
+    breakout_age = float(hist_last["breakout_age"]) if pd.notna(hist_last["breakout_age"]) else np.nan
+    extension_from_ma20 = float(hist_last["extension_from_ma20"]) if pd.notna(hist_last["extension_from_ma20"]) else np.nan
+    rs_vs_spy_20d = float(hist_last["rs_vs_spy_20d"]) if pd.notna(hist_last["rs_vs_spy_20d"]) else np.nan
+    rs_vs_qqq_20d = float(hist_last["rs_vs_qqq_20d"]) if pd.notna(hist_last["rs_vs_qqq_20d"]) else np.nan
+    scanner_score = float(hist_last["scanner_score"]) if pd.notna(hist_last["scanner_score"]) else np.nan
+
+    extension_from_ma50 = (close / ma50 - 1) if pd.notna(close) and pd.notna(ma50) and ma50 != 0 else np.nan
+    tuned_breakout_active = bool(
+        pd.notna(close)
+        and pd.notna(ma20)
+        and pd.notna(ma50)
+        and pd.notna(prior_hh50)
+        and pd.notna(breakout_age)
+        and pd.notna(extension_from_ma20)
+        and pd.notna(extension_from_ma50)
+        and pd.notna(rs_vs_spy_20d)
+        and pd.notna(rs_vs_qqq_20d)
+        and pd.notna(scanner_score)
+        and close > ma20
+        and ma20 > ma50
+        and breakout_age <= scanner.MAX_BREAKOUT_AGE
+        and close >= prior_hh50
+        and extension_from_ma20 <= (scanner.BREAKOUT_MAX_ABOVE_MA20_PCT / 100)
+        and extension_from_ma50 <= (scanner.BREAKOUT_MAX_ABOVE_MA50_PCT / 100)
+        and rs_vs_spy_20d >= 8.0
+        and rs_vs_qqq_20d >= 2.0
+        and scanner_score >= 0.60
+    )
+
+    review_row = review_row.copy()
+    review_row["StrategyPreset"] = strategy_preset
+    review_row["PresetBreakoutActive"] = tuned_breakout_active
+    review_row["RSvsSPY20d"] = rs_vs_spy_20d
+    review_row["RSvsQQQ20d"] = rs_vs_qqq_20d
+    review_row["DistFromMA50Pct"] = extension_from_ma50 * 100 if pd.notna(extension_from_ma50) else np.nan
+    review_row["ScannerSignalType"] = "BREAKOUT" if tuned_breakout_active else ""
+    review_row["ScannerTrend"] = tuned_breakout_active
+    return review_row
+
+
+def review_positions(positions: pd.DataFrame, strategy_preset: str = "classic") -> pd.DataFrame:
     if positions.empty:
         return positions
 
@@ -610,13 +820,10 @@ def review_positions(positions: pd.DataFrame) -> pd.DataFrame:
                 "DistFromBreakoutPct": float(last["extension_from_breakout"] * 100) if pd.notna(last["extension_from_breakout"]) else np.nan,
                 "ScannerScore": float(last["scanner_score"]) if pd.notna(last["scanner_score"]) else np.nan,
                 "ScannerTrend": bool(last["scanner_trend"]) if pd.notna(last["scanner_trend"]) else False,
-                "ScannerSignalType": (
-                    "SETUP"
-                    if bool(last["setup_candidate"])
-                    else "BREAKOUT" if bool(last["breakout_candidate"]) else ""
-                ),
+                "ScannerSignalType": str(last.get("scanner_signal_type", "")),
             }
         )
+        review_row = apply_strategy_preset_to_review_row(review_row, last, strategy_preset)
 
         if getattr(row, "InstrumentType", "EQUITY") in {"CALL", "PUT"}:
             recommendation, reason = build_option_recommendation(review_row)
@@ -649,7 +856,12 @@ def review_positions(positions: pd.DataFrame) -> pd.DataFrame:
                 "ScannerSignalType": review_row["ScannerSignalType"] or pd.NA,
                 "BreakoutAge": round(float(review_row["BreakoutAge"]), 1) if pd.notna(review_row["BreakoutAge"]) else np.nan,
                 "DistFromMA20Pct": round(float(review_row["DistFromMA20Pct"]), 2) if pd.notna(review_row["DistFromMA20Pct"]) else np.nan,
+                "DistFromMA50Pct": round(float(review_row["DistFromMA50Pct"]), 2) if pd.notna(review_row.get("DistFromMA50Pct", np.nan)) else np.nan,
                 "DistFromBreakoutPct": round(float(review_row["DistFromBreakoutPct"]), 2) if pd.notna(review_row["DistFromBreakoutPct"]) else np.nan,
+                "RSvsSPY20d": round(float(review_row["RSvsSPY20d"]), 2) if pd.notna(review_row.get("RSvsSPY20d", np.nan)) else np.nan,
+                "RSvsQQQ20d": round(float(review_row["RSvsQQQ20d"]), 2) if pd.notna(review_row.get("RSvsQQQ20d", np.nan)) else np.nan,
+                "StrategyPreset": strategy_preset,
+                "PresetBreakoutActive": bool(review_row.get("PresetBreakoutActive", False)),
                 "MacroRegime": str(macro_snapshot["regime"]),
                 "MacroScore": int(macro_snapshot["score"]),
                 "MacroTrend": str(macro_snapshot["trend"]),
@@ -668,7 +880,7 @@ def review_positions(positions: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(rows).sort_values(["Recommendation", "PnLPct", "Symbol"]).reset_index(drop=True)
 
 
-def review_positions_from_csv(csv_path: str) -> pd.DataFrame:
+def review_positions_from_csv(csv_path: str, strategy_preset: str = "classic") -> pd.DataFrame:
     path = Path(csv_path)
     lines = path.read_text().splitlines()
 
@@ -678,7 +890,7 @@ def review_positions_from_csv(csv_path: str) -> pd.DataFrame:
     else:
         positions = load_simple_positions(csv_path)
 
-    return review_positions(positions)
+    return review_positions(positions, strategy_preset=strategy_preset)
 
 
 def main() -> None:

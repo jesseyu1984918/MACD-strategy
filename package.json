@@ -1,0 +1,113 @@
+{
+  "name": "stock-pick-panel",
+  "version": "1.0.0",
+  "description": "Electron wrapper for the Streamlit stock center app",
+  "main": "electron/main.js",
+  "scripts": {
+    "app:dev": "electron .",
+    "app:dist": "electron-builder --win nsis",
+    "app:dir": "electron-builder --dir"
+  },
+  "devDependencies": {
+    "electron": "^37.2.0",
+    "electron-builder": "^26.0.12"
+  },
+  "build": {
+    "appId": "com.jesse.stockpickpanel",
+    "productName": "Stock Pick Panel",
+    "asar": true,
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "electron/**/*",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "venv",
+        "to": "app/venv",
+        "filter": [
+          "**/*",
+          "!**/__pycache__/**",
+          "!**/*.pyc",
+          "!**/*.pyo"
+        ]
+      },
+      {
+        "from": "stock_center.py",
+        "to": "app/stock_center.py"
+      },
+      {
+        "from": "stockcenter.py",
+        "to": "app/stockcenter.py"
+      },
+      {
+        "from": "Interval_searching.py",
+        "to": "app/Interval_searching.py"
+      },
+      {
+        "from": "MACD_screening.py",
+        "to": "app/MACD_screening.py"
+      },
+      {
+        "from": "macro_market_status.py",
+        "to": "app/macro_market_status.py"
+      },
+      {
+        "from": "news_sentiment.py",
+        "to": "app/news_sentiment.py"
+      },
+      {
+        "from": "position_exit_review.py",
+        "to": "app/position_exit_review.py"
+      },
+      {
+        "from": "scanner.py",
+        "to": "app/scanner.py"
+      },
+      {
+        "from": "pre_trade_checks.py",
+        "to": "app/pre_trade_checks.py"
+      },
+      {
+        "from": "trade_guardrails.py",
+        "to": "app/trade_guardrails.py"
+      },
+      {
+        "from": "turning_point_screener.py",
+        "to": "app/turning_point_screener.py"
+      },
+      {
+        "from": "transaction_diagnosis.py",
+        "to": "app/transaction_diagnosis.py"
+      },
+      {
+        "from": "my_universe.csv",
+        "to": "app/my_universe.csv"
+      },
+      {
+        "from": "combined_universe.csv",
+        "to": "app/combined_universe.csv"
+      },
+      {
+        "from": "nasdaq_100_spy_500.csv",
+        "to": "app/nasdaq_100_spy_500.csv"
+      },
+      {
+        "from": ".yf_cache",
+        "to": "app/.yf_cache",
+        "filter": [
+          "**/*"
+        ]
+      }
+    ],
+    "win": {
+      "target": "nsis"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true
+    }
+  }
+}
